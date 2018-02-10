@@ -26,7 +26,7 @@
 #endif
 
 // Board properties
-#define           FW_VERSION                "esp-bell V1.1"
+#define           FW_VERSION                "esp-bell V1.2"
 
 // MQTT
 #define           MQTT_ON_PAYLOAD           "1"
@@ -43,6 +43,8 @@
 #define           MQTT_TOPIC_DOOR_BUZZER    "door/switch"
 #define           MQTT_TOPIC_DOOR_REED      "door/state"
 
+#define           DEBOUNCE_DELAY             50    // the debounce time; increase if the output flickers
+
 char              MQTT_CLIENT_ID[7]                               = {0};
 char              MQTT_ENDPOINT_SYS_VERSION[MQTT_ENDPOINT_SIZE]   = {0};
 char              MQTT_ENDPOINT_SYS_UPDATE[MQTT_ENDPOINT_SIZE]    = {0};
@@ -56,8 +58,6 @@ char              MQTT_ENDPOINT_DOOR_REED[MQTT_ENDPOINT_SIZE]     = {0};
 enum CMD {
   CMD_NOT_DEFINED,
   CMD_DOOR_BUZZER,
-  CMD_BELL_CHANGED,
-  CMD_DOOR_REED_CHANGED,
 };
 volatile uint8_t cmd = CMD_NOT_DEFINED;
 
@@ -71,9 +71,11 @@ WiFiClient        wifiClient;
 PubSubClient      mqttClient(wifiClient);
 
 uint8_t           bellState                                        = LOW; // HIGH: openend switch
-uint8_t           currentBellState                                 = bellState;
+uint8_t           lastBellState                                    = bellState;
+unsigned long     lastBellDebounceTime                             = 0;  // the last time the output pin was toggled
 uint8_t           doorReedState                                    = LOW; // HIGH: openend switch
-uint8_t           currentDoorReedState                             = doorReedState;
+uint8_t           lastDoorReedState                                = doorReedState;
+unsigned long     lastDoorReedDebounceTime                         = 0;  // the last time the output pin was toggled
 
 // PREDEFINED FUNCTIONS
 void reconnect();
@@ -218,23 +220,6 @@ void reset() {
   delay(1000);
 }
 
-///////////////////////////////////////////////////////////////////////////
-//   ISR
-///////////////////////////////////////////////////////////////////////////
-/*
-  Function called when the bell is rinning
- */
-void bellInterrupt() {
-  cmd = CMD_BELL_CHANGED;
-}
-
-/*
-  Fuction called when the door is open
-*/
-void doorReedInterrupt() {
-  cmd = CMD_DOOR_REED_CHANGED;
-}
-
 /*
   Function called to connect to Wifi
  */
@@ -269,8 +254,6 @@ void setup() {
   pinMode(PIN_DOOR_BUZZER, OUTPUT);
   pinMode(PIN_BELL, INPUT_PULLUP);
   pinMode(PIN_DOOR_REED, INPUT_PULLUP);
-  attachInterrupt(PIN_BELL, bellInterrupt, CHANGE);
-  attachInterrupt(PIN_DOOR_REED, doorReedInterrupt, CHANGE);
 
   // switch on led and buzzer off
   digitalWrite(PIN_LED, LOW);
@@ -334,27 +317,39 @@ void loop() {
       buzzerStart = millis();
       cmd = CMD_NOT_DEFINED;
       break;
-    case CMD_BELL_CHANGED:
-      currentBellState = digitalRead(PIN_BELL);
-      if (bellState != currentBellState) {
-        DEBUG_PRINTLN(F("Info: bell"));
-        bellState = currentBellState;
-        publishState(MQTT_ENDPOINT_BELL, bellState == LOW ? HIGH : LOW);
-      }
-      cmd = CMD_NOT_DEFINED;
-      break;
-    case CMD_DOOR_REED_CHANGED:
-      currentDoorReedState = digitalRead(PIN_DOOR_REED);
-      if (doorReedState != currentDoorReedState) {
-        DEBUG_PRINTLN(F("Info: reed"));
-        doorReedState = currentDoorReedState;
-        publishState(MQTT_ENDPOINT_DOOR_REED, doorReedState == LOW ? HIGH : LOW);
-      }
-      cmd = CMD_NOT_DEFINED;
-      break;
   }
 
   yield();
+
+  int reading = digitalRead(PIN_BELL);
+  if (reading != lastDoorReedState) {
+    lastBellDebounceTime = millis();
+  }
+  if ((millis() - lastBellDebounceTime) > DEBOUNCE_DELAY) {
+    if (reading != doorReedState) {
+      doorReedState = reading;
+      if (doorReedState == HIGH) {
+        DEBUG_PRINTLN(F("Info: reed"));
+        publishState(MQTT_ENDPOINT_DOOR_REED, doorReedState == LOW ? HIGH : LOW);
+      }
+    }
+  }
+  lastDoorReedState = reading;
+
+  reading = digitalRead(PIN_BELL);
+  if (reading != lastBellState) {
+    lastDoorReedDebounceTime = millis();
+  }
+  if ((millis() - lastDoorReedDebounceTime) > DEBOUNCE_DELAY) {
+    if (reading != bellState) {
+      bellState = reading;
+      if (bellState == HIGH) {
+        DEBUG_PRINTLN(F("Info: bell"));
+        publishState(MQTT_ENDPOINT_BELL, bellState == LOW ? HIGH : LOW);
+      }
+    }
+  }
+  lastBellState = reading;
 
   // reset door buzzer after 2 seconds
   if (buzzerStart != 0 && millis() - buzzerStart >= 1000 * 2) {
