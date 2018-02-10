@@ -16,4 +16,4 @@ install:
     - platformio lib install PubSubClient
 
 script:
-    - platformio ci --lib="." --board=d1_mini --board=nodemcu
+    - platformio ci --board=d1_mini --board=nodemcu
