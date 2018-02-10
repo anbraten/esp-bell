@@ -26,7 +26,7 @@
 #endif
 
 // Board properties
-#define           FW_VERSION                "1.0"
+#define           FW_VERSION                "esp-bell V1.1"
 
 // MQTT
 #define           MQTT_ON_PAYLOAD           "1"
@@ -37,6 +37,7 @@
 #define           MQTT_TOPIC_SYSTEM_VERSION "system/version"
 #define           MQTT_TOPIC_SYSTEM_UPDATE  "system/update"
 #define           MQTT_TOPIC_SYSTEM_RESET   "system/reset"
+#define           MQTT_TOPIC_SYSTEM_ONLINE  "system/online"
 
 #define           MQTT_TOPIC_BELL           "bell/state"
 #define           MQTT_TOPIC_DOOR_BUZZER    "door/switch"
@@ -46,6 +47,7 @@ char              MQTT_CLIENT_ID[7]                               = {0};
 char              MQTT_ENDPOINT_SYS_VERSION[MQTT_ENDPOINT_SIZE]   = {0};
 char              MQTT_ENDPOINT_SYS_UPDATE[MQTT_ENDPOINT_SIZE]    = {0};
 char              MQTT_ENDPOINT_SYS_RESET[MQTT_ENDPOINT_SIZE]     = {0};
+char              MQTT_ENDPOINT_SYS_ONLINE[MQTT_ENDPOINT_SIZE]    = {0};
 
 char              MQTT_ENDPOINT_BELL[MQTT_ENDPOINT_SIZE]          = {0};
 char              MQTT_ENDPOINT_DOOR_BUZZER[MQTT_ENDPOINT_SIZE]   = {0};
@@ -60,9 +62,6 @@ enum CMD {
 volatile uint8_t cmd = CMD_NOT_DEFINED;
 
 unsigned long buzzerStart                    = 0;
-#ifdef DEBUG
-  unsigned long lastPing                       = 0;
-#endif
 
 #ifdef TLS
 WiFiClientSecure  wifiClient;
@@ -70,6 +69,11 @@ WiFiClientSecure  wifiClient;
 WiFiClient        wifiClient;
 #endif
 PubSubClient      mqttClient(wifiClient);
+
+uint8_t           bellState                                        = LOW; // HIGH: openend switch
+uint8_t           currentBellState                                 = bellState;
+uint8_t           doorReedState                                    = LOW; // HIGH: openend switch
+uint8_t           currentDoorReedState                             = doorReedState;
 
 // PREDEFINED FUNCTIONS
 void reconnect();
@@ -166,7 +170,7 @@ void reconnect() {
 
   // try to connect to the MQTT broker
   while (!mqttClient.connected()) {
-    if (mqttClient.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASS)) {
+    if (mqttClient.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASS, MQTT_ENDPOINT_SYS_ONLINE, 0, 1, "0")) {
       DEBUG_PRINTLN(F("INFO: The client is successfully connected to the MQTT broker"));
     } else {
       DEBUG_PRINTLN(F("ERROR: The connection to the MQTT broker failed"));
@@ -263,8 +267,8 @@ void setup() {
   // init the I/O
   pinMode(PIN_LED, OUTPUT);
   pinMode(PIN_DOOR_BUZZER, OUTPUT);
-  pinMode(PIN_BELL, INPUT);
-  pinMode(PIN_DOOR_REED, INPUT);
+  pinMode(PIN_BELL, INPUT_PULLUP);
+  pinMode(PIN_DOOR_REED, INPUT_PULLUP);
   attachInterrupt(PIN_BELL, bellInterrupt, CHANGE);
   attachInterrupt(PIN_DOOR_REED, doorReedInterrupt, CHANGE);
 
@@ -284,6 +288,7 @@ void setup() {
   sprintf(MQTT_ENDPOINT_SYS_VERSION, "%s%06X/%s", MQTT_TOPIC_BASE, ESP.getChipId(), MQTT_TOPIC_SYSTEM_VERSION);
   sprintf(MQTT_ENDPOINT_SYS_UPDATE, "%s%06X/%s", MQTT_TOPIC_BASE, ESP.getChipId(), MQTT_TOPIC_SYSTEM_UPDATE);
   sprintf(MQTT_ENDPOINT_SYS_RESET, "%s%06X/%s", MQTT_TOPIC_BASE, ESP.getChipId(), MQTT_TOPIC_SYSTEM_RESET);
+  sprintf(MQTT_ENDPOINT_SYS_ONLINE, "%s%06X/%s", MQTT_TOPIC_BASE, ESP.getChipId(), MQTT_TOPIC_SYSTEM_ONLINE);
 
   sprintf(MQTT_ENDPOINT_BELL, "%s%06X/%s", MQTT_TOPIC_BASE, ESP.getChipId(), MQTT_TOPIC_BELL);
   sprintf(MQTT_ENDPOINT_DOOR_BUZZER, "%s%06X/%s", MQTT_TOPIC_BASE, ESP.getChipId(), MQTT_TOPIC_DOOR_BUZZER);
@@ -303,6 +308,7 @@ void setup() {
 
   // publish running firmware version
   publishData(MQTT_ENDPOINT_SYS_VERSION, (char*) FW_VERSION);
+  publishState(MQTT_ENDPOINT_SYS_ONLINE, 1);
 
   digitalWrite(PIN_LED, HIGH);
 }
@@ -314,14 +320,6 @@ void loop() {
     reconnect();
   }
   mqttClient.loop();
-
-#ifdef DEBUG
-  // ping every 30 seconds the current version to server
-  if (lastPing == 0 || millis() - lastPing >= 1000 * 10){
-    lastPing = millis();
-    publishData(MQTT_ENDPOINT_SYS_VERSION, (char*) FW_VERSION);
-  }
-#endif
 
   yield();
 
@@ -337,11 +335,21 @@ void loop() {
       cmd = CMD_NOT_DEFINED;
       break;
     case CMD_BELL_CHANGED:
-      publishState(MQTT_ENDPOINT_BELL, digitalRead(PIN_BELL));
+      currentBellState = digitalRead(PIN_BELL);
+      if (bellState != currentBellState) {
+        DEBUG_PRINTLN(F("Info: bell"));
+        bellState = currentBellState;
+        publishState(MQTT_ENDPOINT_BELL, bellState == LOW ? HIGH : LOW);
+      }
       cmd = CMD_NOT_DEFINED;
       break;
     case CMD_DOOR_REED_CHANGED:
-      publishState(MQTT_ENDPOINT_DOOR_REED, digitalRead(PIN_DOOR_REED));
+      currentDoorReedState = digitalRead(PIN_DOOR_REED);
+      if (doorReedState != currentDoorReedState) {
+        DEBUG_PRINTLN(F("Info: reed"));
+        doorReedState = currentDoorReedState;
+        publishState(MQTT_ENDPOINT_DOOR_REED, doorReedState == LOW ? HIGH : LOW);
+      }
       cmd = CMD_NOT_DEFINED;
       break;
   }
