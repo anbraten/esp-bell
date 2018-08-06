@@ -26,7 +26,7 @@
 #endif
 
 // Board properties
-#define           FW_VERSION                "esp-bell V1.2"
+#define           FW_VERSION                "esp-bell V1.3"
 
 // MQTT
 #define           MQTT_ON_PAYLOAD           "1"
@@ -40,7 +40,7 @@
 #define           MQTT_TOPIC_SYSTEM_ONLINE  "system/online"
 
 #define           MQTT_TOPIC_BELL           "bell/state"
-#define           MQTT_TOPIC_DOOR_BUZZER    "door/switch"
+#define           MQTT_TOPIC_DOOR_OPENER    "door/switch"
 #define           MQTT_TOPIC_DOOR_REED      "door/state"
 
 #define           DEBOUNCE_DELAY             50    // the debounce time; increase if the output flickers
@@ -52,16 +52,12 @@ char              MQTT_ENDPOINT_SYS_RESET[MQTT_ENDPOINT_SIZE]     = {0};
 char              MQTT_ENDPOINT_SYS_ONLINE[MQTT_ENDPOINT_SIZE]    = {0};
 
 char              MQTT_ENDPOINT_BELL[MQTT_ENDPOINT_SIZE]          = {0};
-char              MQTT_ENDPOINT_DOOR_BUZZER[MQTT_ENDPOINT_SIZE]   = {0};
-char              MQTT_ENDPOINT_DOOR_REED[MQTT_ENDPOINT_SIZE]     = {0};
+char              MQTT_ENDPOINT_DOOR_OPENER[MQTT_ENDPOINT_SIZE]   = {0};
+#ifdef DOOR_REED
+  char              MQTT_ENDPOINT_DOOR_REED[MQTT_ENDPOINT_SIZE]     = {0};
+#endif
 
-enum CMD {
-  CMD_NOT_DEFINED,
-  CMD_DOOR_BUZZER,
-};
-volatile uint8_t cmd = CMD_NOT_DEFINED;
-
-unsigned long buzzerStart                    = 0;
+unsigned long     openerStart                                     = 0;
 
 #ifdef TLS
 WiFiClientSecure  wifiClient;
@@ -73,9 +69,12 @@ PubSubClient      mqttClient(wifiClient);
 uint8_t           bellState                                        = LOW; // HIGH: openend switch
 uint8_t           lastBellState                                    = bellState;
 unsigned long     lastBellDebounceTime                             = 0;  // the last time the output pin was toggled
-uint8_t           doorReedState                                    = LOW; // HIGH: openend switch
-uint8_t           lastDoorReedState                                = doorReedState;
-unsigned long     lastDoorReedDebounceTime                         = 0;  // the last time the output pin was toggled
+
+#ifdef DOOR_REED
+  uint8_t           doorReedState                                    = LOW; // HIGH: openend switch
+  uint8_t           lastDoorReedState                                = doorReedState;
+  unsigned long     lastDoorReedDebounceTime                         = 0;  // the last time the output pin was toggled
+#endif
 
 // PREDEFINED FUNCTIONS
 void reconnect();
@@ -122,9 +121,12 @@ void callback(char* topic, byte* _payload, unsigned int length) {
   // handle the MQTT topic of the received message
   _payload[length] = '\0';
   char* payload = (char*) _payload;
-  if (strcmp(topic, MQTT_ENDPOINT_DOOR_BUZZER)==0) {
+  if (strcmp(topic, MQTT_ENDPOINT_DOOR_OPENER)==0) {
     if (strcmp(payload, MQTT_ON_PAYLOAD)==0) {
-      cmd = CMD_DOOR_BUZZER;
+      DEBUG_PRINTLN(F("Info: opener"));
+      digitalWrite(PIN_DOOR_OPENER, HIGH);
+      digitalWrite(PIN_LED, LOW); // led is inverted, so LOW => led is on
+      openerStart = millis();
     }
   } else if (strcmp(topic, MQTT_ENDPOINT_SYS_RESET)==0) {
     if (strcmp(payload, MQTT_ON_PAYLOAD)==0) {
@@ -183,7 +185,7 @@ void reconnect() {
   mqttClient.subscribe(MQTT_ENDPOINT_SYS_RESET);
   mqttClient.subscribe(MQTT_ENDPOINT_SYS_UPDATE);
 
-  mqttClient.subscribe(MQTT_ENDPOINT_DOOR_BUZZER);
+  mqttClient.subscribe(MQTT_ENDPOINT_DOOR_OPENER);
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -251,13 +253,15 @@ void setup() {
 
   // init the I/O
   pinMode(PIN_LED, OUTPUT);
-  pinMode(PIN_DOOR_BUZZER, OUTPUT);
+  pinMode(PIN_DOOR_OPENER, OUTPUT);
   pinMode(PIN_BELL, INPUT_PULLUP);
+#ifdef DOOR_REED
   pinMode(PIN_DOOR_REED, INPUT_PULLUP);
+#endif
 
-  // switch on led and buzzer off
+  // switch on led and opener off
   digitalWrite(PIN_LED, LOW);
-  digitalWrite(PIN_DOOR_BUZZER, LOW);
+  digitalWrite(PIN_DOOR_OPENER, LOW);
 
   // connect to wifi
   connectWiFi();
@@ -274,8 +278,10 @@ void setup() {
   sprintf(MQTT_ENDPOINT_SYS_ONLINE, "%s%06X/%s", MQTT_TOPIC_BASE, ESP.getChipId(), MQTT_TOPIC_SYSTEM_ONLINE);
 
   sprintf(MQTT_ENDPOINT_BELL, "%s%06X/%s", MQTT_TOPIC_BASE, ESP.getChipId(), MQTT_TOPIC_BELL);
-  sprintf(MQTT_ENDPOINT_DOOR_BUZZER, "%s%06X/%s", MQTT_TOPIC_BASE, ESP.getChipId(), MQTT_TOPIC_DOOR_BUZZER);
+  sprintf(MQTT_ENDPOINT_DOOR_OPENER, "%s%06X/%s", MQTT_TOPIC_BASE, ESP.getChipId(), MQTT_TOPIC_DOOR_OPENER);
+#ifdef DOOR_REED
   sprintf(MQTT_ENDPOINT_DOOR_REED, "%s%06X/%s", MQTT_TOPIC_BASE, ESP.getChipId(), MQTT_TOPIC_DOOR_REED);
+#endif
 
 #ifdef TLS
   // check the fingerprint of io.adafruit.com's SSL cert
@@ -306,22 +312,8 @@ void loop() {
 
   yield();
 
-  switch (cmd) {
-    case CMD_NOT_DEFINED:
-      // do nothing
-      break;
-    case CMD_DOOR_BUZZER:
-      DEBUG_PRINTLN(F("Info: buzzer"));
-      digitalWrite(PIN_DOOR_BUZZER, HIGH);
-      digitalWrite(PIN_LED, LOW); // led is inverted, so LOW => led is on
-      buzzerStart = millis();
-      cmd = CMD_NOT_DEFINED;
-      break;
-  }
-
-  yield();
-
-  int reading = digitalRead(PIN_BELL);
+#ifdef DOOR_REED
+  int reading = digitalRead(PIN_DOOR_REED);
   if (reading != lastDoorReedState) {
     lastBellDebounceTime = millis();
   }
@@ -335,12 +327,13 @@ void loop() {
     }
   }
   lastDoorReedState = reading;
+#endif
 
   reading = digitalRead(PIN_BELL);
   if (reading != lastBellState) {
-    lastDoorReedDebounceTime = millis();
+    lastBellDebounceTime = millis();
   }
-  if ((millis() - lastDoorReedDebounceTime) > DEBOUNCE_DELAY) {
+  if ((millis() - lastBellDebounceTime) > DEBOUNCE_DELAY) {
     if (reading != bellState) {
       bellState = reading;
       if (bellState == HIGH) {
@@ -351,13 +344,13 @@ void loop() {
   }
   lastBellState = reading;
 
-  // reset door buzzer after 2 seconds
-  if (buzzerStart != 0 && millis() - buzzerStart >= 1000 * 2) {
-    DEBUG_PRINTLN(F("Info: buzzer reset"));
-    digitalWrite(PIN_DOOR_BUZZER, LOW);
+  // reset door opener after 2 seconds
+  if (openerStart != 0 && millis() - openerStart >= 1000 * 2) {
+    DEBUG_PRINTLN(F("Info: opener reset"));
+    digitalWrite(PIN_DOOR_OPENER, LOW);
     digitalWrite(PIN_LED, HIGH); // led is inverted, so LOW => led is on
-    publishState(MQTT_ENDPOINT_DOOR_BUZZER, LOW);
-    buzzerStart = 0;
+    publishState(MQTT_ENDPOINT_DOOR_OPENER, LOW);
+    openerStart = 0;
   }
 
   yield();

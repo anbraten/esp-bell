@@ -14,9 +14,12 @@
 
 // board properties
 #define           PIN_LED                   LED_BUILTIN //D4
-#define           PIN_BELL                  D2
-#define           PIN_DOOR_BUZZER           D1
-#define           PIN_DOOR_REED             D5
+#define           PIN_BELL                  D5
+#define           PIN_DOOR_OPENER           D2
+#define           PIN_DOOR_REED             D6
+
+// enable features
+// #define           DOOR_REED
 
 // TLS support, make sure to edit the fingerprint
 //#define           TLS
