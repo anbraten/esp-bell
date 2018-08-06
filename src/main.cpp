@@ -312,7 +312,7 @@ void loop() {
 
   yield();
 
-int reading;
+  int reading;
 
 #ifdef DOOR_REED
   reading = digitalRead(PIN_DOOR_REED);
