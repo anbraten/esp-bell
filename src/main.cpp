@@ -312,8 +312,10 @@ void loop() {
 
   yield();
 
+  int reading;
+
 #ifdef DOOR_REED
-  int reading = digitalRead(PIN_DOOR_REED);
+  reading = digitalRead(PIN_DOOR_REED);
   if (reading != lastDoorReedState) {
     lastBellDebounceTime = millis();
   }
